@@ -56,7 +56,7 @@ func parseItemRequest(r *http.Request) pr0gramm.ItemsRequest {
 
   // parse "flags" field
   if formValue := r.FormValue("flags"); formValue != "" {
-    if value, err := strconv.ParseInt(formValue, 10, 0); err != nil {
+    if value, err := strconv.ParseInt(formValue, 10, 0); err == nil {
       query = query.WithFlags(pr0gramm.ToContentTypes(int(value)))
     }
   }

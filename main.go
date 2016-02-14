@@ -152,10 +152,12 @@ func HandleRandom(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gr
   var rows *sql.Rows
   var err error
 
-  if req.ContentTypes.AsFlags() == 4 {
+  // execute the correct query
+  flags := req.ContentTypes.AsFlags()
+  if flags == 4 {
     rows, err = db.Query(QueryRandomNsfl)
   } else {
-    rows, err = db.Query(QueryRandomRest, req.ContentTypes.AsFlags())
+    rows, err = db.Query(QueryRandomRest, flags)
   }
 
   if err != nil {
@@ -193,6 +195,41 @@ func ping(w http.ResponseWriter, r *http.Request) {
   w.WriteHeader(http.StatusOK)
 }
 
+func UpdateNsflView(db *sql.DB) {
+  go UpdateNsflViewOnce(db)
+  for range time.Tick(6 * time.Hour) {
+    go UpdateNsflViewOnce(db)
+  }
+}
+
+func UpdateNsflViewOnce(db *sql.DB) {
+  log.Println("Updating nsfl view")
+
+  tx, err := db.Begin()
+  if err != nil {
+    panic(err)
+  }
+
+  _, err = tx.Exec(`
+    -- create view with only nsfl posts
+    CREATE MATERIALIZED VIEW IF NOT EXISTS random_items_nsfl (id, promoted) AS (
+      SELECT id, promoted FROM items WHERE flags=4);
+
+    -- to use "refresh view concurrently", we need a unique index on the id column
+    CREATE UNIQUE INDEX IF NOT EXISTS postgres_random_nsfl__id ON random_items_nsfl(id);
+
+    -- refresh the nsfl items.
+    REFRESH MATERIALIZED VIEW CONCURRENTLY random_items_nsfl;`)
+
+  if err != nil {
+    tx.Rollback()
+    panic(err)
+  } else {
+    log.Println("Updating nsfl view completed")
+    tx.Commit()
+  }
+}
+
 func main() {
   args := parseArguments()
 
@@ -219,6 +256,8 @@ func main() {
     fmt.Printf("Starting datadog reporter on host %s\n", host)
     go datadog.New(host, args.Datadog).DefaultReporter().Start(SAMPLE_PERIOD)
   }
+
+  go UpdateNsflView(db)
 
   router := mux.NewRouter().StrictSlash(true)
 
