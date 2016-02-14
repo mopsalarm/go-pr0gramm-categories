@@ -188,6 +188,11 @@ func parseArguments() *Args {
   return args
 }
 
+// just send http ok
+func ping(w http.ResponseWriter, r *http.Request) {
+  w.WriteHeader(http.StatusOK)
+}
+
 func main() {
   args := parseArguments()
 
@@ -221,6 +226,7 @@ func main() {
   router.Handle("/controversial", &CategoryHandler{db, timer, HandleControversial})
   router.Handle("/bestof", &CategoryHandler{db, timer, HandleBestOf})
   router.Handle("/random", &CategoryHandler{db, timer, HandleRandom})
+  router.HandleFunc("/ping", ping)
 
   log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", args.Port),
     handlers.RecoveryHandler()(
