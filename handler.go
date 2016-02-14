@@ -18,7 +18,7 @@ type CategoryHandler struct {
 }
 
 func parseItemRequest(r *http.Request) pr0gramm.ItemsRequest {
-  query := pr0gramm.ItemsRequest{Flags: pr0gramm.ContentTypes{pr0gramm.SFW}}
+  query := pr0gramm.ItemsRequest{ContentTypes: pr0gramm.ContentTypes{pr0gramm.SFW}}
 
   // parse "older" field
   if formValue := r.FormValue("older"); formValue != "" {

@@ -16,6 +16,7 @@ import (
   _ "github.com/lib/pq"
   "strconv"
   "strings"
+  "math/rand"
 )
 
 const SAMPLE_PERIOD = time.Minute
@@ -82,7 +83,7 @@ func HandleControversial(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request)
       AND items.id NOT IN (
         SELECT tags.item_id FROM tags WHERE tags.item_id=items.id AND tags.confidence>0.3 AND lower(tag)='repost'
     )
-    ORDER BY controversial.id DESC LIMIT 120`, req.Flags.AsFlags(), req.Older, req.Newer)
+    ORDER BY controversial.id DESC LIMIT 120`, req.ContentTypes.AsFlags(), req.Older, req.Newer)
 
   if err != nil {
     panic(err)
@@ -115,8 +116,8 @@ func HandleBestOf(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gr
       "to_tsvector('simple', tags.tag) @@ to_tsquery('simple', %s)", term))
   }
 
-  if req.Flags.AsFlags() != 7 {
-    qWhere = append(qWhere, fmt.Sprintf("items.flags & %d != 0", req.Flags.AsFlags()))
+  if req.ContentTypes.AsFlags() != 7 {
+    qWhere = append(qWhere, fmt.Sprintf("items.flags & %d != 0", req.ContentTypes.AsFlags()))
   }
 
   if req.User != nil {
@@ -145,6 +146,33 @@ func HandleBestOf(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gr
 
   defer rows.Close()
   return scanItemsFromCursor(rows, req), nil
+}
+
+func HandleRandom(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gramm.Items, error) {
+  var rows *sql.Rows
+  var err error
+
+  if req.ContentTypes.AsFlags() == 4 {
+    rows, err = db.Query(QueryRandomNsfl)
+  } else {
+    rows, err = db.Query(QueryRandomRest, req.ContentTypes.AsFlags())
+  }
+
+  if err != nil {
+    panic(err)
+  }
+
+  defer rows.Close()
+  result := scanItemsFromCursor(rows, req)
+
+  // shuffle
+  for i := range result.Items {
+    j := rand.Intn(i + 1)
+    result.Items[i], result.Items[j] = result.Items[j], result.Items[i]
+  }
+
+  result.AtEnd = len(result.Items) > 60
+  return result, nil
 }
 
 func parseArguments() *Args {
@@ -176,7 +204,6 @@ func main() {
     log.Fatal(err)
   }
 
-
   // get info about the runtime every few seconds
   metrics.RegisterRuntimeMemStats(metrics.DefaultRegistry)
   go metrics.CaptureRuntimeMemStats(metrics.DefaultRegistry, SAMPLE_PERIOD)
@@ -193,6 +220,7 @@ func main() {
   timer := metrics.NewRegisteredTimer("pr0gramm.categories.controversial.update", nil)
   router.Handle("/controversial", &CategoryHandler{db, timer, HandleControversial})
   router.Handle("/bestof", &CategoryHandler{db, timer, HandleBestOf})
+  router.Handle("/random", &CategoryHandler{db, timer, HandleRandom})
 
   log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", args.Port),
     handlers.RecoveryHandler()(
