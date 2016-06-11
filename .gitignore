@@ -1,3 +1,4 @@
 /go-pr0gramm-categories
 *.iml
 /.idea
+/vendor

@@ -49,7 +49,7 @@ func scanItemsFromCursor(rows *sql.Rows, req pr0gramm.ItemsRequest) pr0gramm.Ite
 		var item pr0gramm.Item
 		err := rows.Scan(&item.Id, &item.Promoted, &item.Up, &item.Down, &item.Flags,
 			&item.Image, &item.Source, &item.Thumbnail, &item.Fullsize,
-			&item.User, &item.Mark, &created)
+			&item.User, &item.Mark, &created, &item.Width, &item.Height, &item.Audio)
 
 		if err != nil {
 			panic(err)
@@ -73,7 +73,7 @@ func HandleControversial(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request)
 	rows, err := db.Query(`
     SELECT items.id, items.promoted, items.up, items.down, items.flags,
       items.image, items.source, items.thumb, items.fullsize,
-      items.username, items.mark, items.created
+      items.username, items.mark, items.created, items.width, items.height, items.audio
     FROM items
       JOIN controversial ON items.id=controversial.item_id
     WHERE (items.flags & $1 != 0)
@@ -128,7 +128,7 @@ func HandleBestOf(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gr
     SELECT DISTINCT ON (items_bestof.id)
       items.id, items.promoted, items.up, items.down, items.flags,
       items.image, items.source, items.thumb, items.fullsize,
-      items.username, items.mark, items.created
+      items.username, items.mark, items.created, items.width, items.height, items.audio
     FROM items_bestof
     %s WHERE %s
       AND ($1 = 0 OR items.id < $1)
@@ -238,7 +238,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	db.SetMaxOpenConns(4)
+	defer db.Close()
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(5*time.Minute)
 
 	// check if it is valid
 	if err = db.Ping(); err != nil {
