@@ -21,6 +21,8 @@ import (
 
 const SAMPLE_PERIOD = time.Minute
 
+const AUDIO = 8;
+
 type Args struct {
 	HelpFlag bool   `flag:"help" description:"Display this help message and exit"`
 	Port     int    `option:"p, port" default:"8080" description:"The port to open the rest service on"`
@@ -121,7 +123,7 @@ func HandleBestOf(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gr
 
 	if req.User != nil {
 		name := strings.ToLower(*req.User)
-		qWhere = append(qWhere, "lower(items.username)="+EscapeDbString(name))
+		qWhere = append(qWhere, "lower(items.username)=" + EscapeDbString(name))
 	}
 
 	query := fmt.Sprintf(`
@@ -153,8 +155,8 @@ func HandleRandom(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gr
 
 	// execute the correct query
 	flags := req.ContentTypes.AsFlags()
-	if flags == 4 {
-		rows, err = db.Query(QueryRandomNsfl)
+	if flags == 4 || flags == (4|AUDIO) {
+		rows, err = db.Query(QueryRandomNsfl, flags)
 	} else {
 		rows, err = db.Query(QueryRandomRest, flags)
 	}
@@ -211,8 +213,8 @@ func UpdateNsflViewOnce(db *sql.DB) {
 
 	_, err = tx.Exec(`
     -- create view with only nsfl posts
-    CREATE MATERIALIZED VIEW IF NOT EXISTS random_items_nsfl (id, promoted) AS (
-      SELECT id, promoted FROM items WHERE flags=4);
+    CREATE MATERIALIZED VIEW IF NOT EXISTS random_items_nsfl (id, flags, promoted) AS (
+      SELECT id, flags, promoted FROM items WHERE flags=4);
 
     -- to use "refresh view concurrently", we need a unique index on the id column
     CREATE UNIQUE INDEX IF NOT EXISTS postgres_random_nsfl__id ON random_items_nsfl(id);

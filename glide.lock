@@ -1,5 +1,5 @@
 hash: 6bff2525e423df85ec22fcdc8910b2f2aa74d09560aa2945795bb26430863f7b
-updated: 2016-06-11T21:19:13.638283+02:00
+updated: 2016-06-13T20:27:15.778687+02:00
 imports:
 - name: github.com/bobziuchkovski/writ
   version: 08e3f25d8bc677e6dcf7b157614c712622556019
@@ -14,7 +14,7 @@ imports:
   subpackages:
   - oid
 - name: github.com/mopsalarm/go-pr0gramm
-  version: de6f1c6a5320d7a667da7ab077f801471eb71972
+  version: d627666aa9f6031c7851844fbe04efbf9c62fee1
 - name: github.com/rcrowley/go-metrics
   version: eeba7bd0dd01ace6e690fa833b3f22aaec29af43
 - name: github.com/vistarmedia/go-datadog
