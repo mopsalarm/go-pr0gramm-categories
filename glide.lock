@@ -1,5 +1,5 @@
-hash: 6bff2525e423df85ec22fcdc8910b2f2aa74d09560aa2945795bb26430863f7b
-updated: 2016-06-13T20:27:15.778687+02:00
+hash: 3fe69a61291999aa97d01e9857ced0f93aabdd7d253c7d6c239f0b7ed11ed4ee
+updated: 2016-07-16T20:15:26.035691+02:00
 imports:
 - name: github.com/bobziuchkovski/writ
   version: 08e3f25d8bc677e6dcf7b157614c712622556019
@@ -14,9 +14,9 @@ imports:
   subpackages:
   - oid
 - name: github.com/mopsalarm/go-pr0gramm
-  version: d627666aa9f6031c7851844fbe04efbf9c62fee1
+  version: 851a52045e855c424a67afdfa59293f69634bb95
 - name: github.com/rcrowley/go-metrics
   version: eeba7bd0dd01ace6e690fa833b3f22aaec29af43
 - name: github.com/vistarmedia/go-datadog
   version: d05578420bfaf173df31fc00580f57b904df6222
-devImports: []
+testImports: []
