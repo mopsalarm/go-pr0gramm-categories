@@ -21,7 +21,7 @@ import (
 
 const SAMPLE_PERIOD = time.Minute
 
-const AUDIO = 8;
+const AUDIO = 8
 
 type Args struct {
 	HelpFlag bool   `flag:"help" description:"Display this help message and exit"`
@@ -81,10 +81,28 @@ func HandleControversial(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request)
     WHERE (items.flags & $1 != 0)
       AND ($2 = 0 OR items.id < $2)
       AND ($3 = 0 OR items.id > $3)
-      AND items.id NOT IN (
-        SELECT tags.item_id FROM tags WHERE tags.item_id=items.id AND tags.confidence>0.3 AND lower(tag)='repost'
-    )
     ORDER BY controversial.id DESC LIMIT 120`, req.ContentTypes.AsFlags(), req.Older, req.Newer)
+
+	if err != nil {
+		panic(err)
+	}
+
+	defer rows.Close()
+	return scanItemsFromCursor(rows, req), nil
+}
+
+func HandleText(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gramm.Items, error) {
+	rows, err := db.Query(`
+    SELECT items.id, items.promoted, items.up, items.down, items.flags,
+      items.image, items.source, items.thumb, items.fullsize,
+      items.username, items.mark, items.created, items.width, items.height, items.audio
+    FROM items
+      JOIN items_text ON items.id=items_text.item_id
+    WHERE items_text.has_text
+    	AND (items.flags & $1 != 0)
+      AND ($2 = 0 OR items.id < $2)
+      AND ($3 = 0 OR items.id > $3)
+    ORDER BY items.id DESC LIMIT 120`, req.ContentTypes.AsFlags(), req.Older, req.Newer)
 
 	if err != nil {
 		panic(err)
@@ -123,7 +141,7 @@ func HandleBestOf(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gr
 
 	if req.User != nil {
 		name := strings.ToLower(*req.User)
-		qWhere = append(qWhere, "lower(items.username)=" + EscapeDbString(name))
+		qWhere = append(qWhere, "lower(items.username)="+EscapeDbString(name))
 	}
 
 	query := fmt.Sprintf(`
@@ -269,6 +287,7 @@ func main() {
 	router.Handle("/controversial", &CategoryHandler{db, timer, HandleControversial})
 	router.Handle("/bestof", &CategoryHandler{db, timer, HandleBestOf})
 	router.Handle("/random", &CategoryHandler{db, timer, HandleRandom})
+	router.Handle("/text", &CategoryHandler{db, timer, HandleText})
 	router.HandleFunc("/ping", ping)
 
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", args.Port),
