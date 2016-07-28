@@ -102,6 +102,7 @@ func HandleText(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gram
     	AND (items.flags & $1 != 0)
       AND ($2 = 0 OR items.id < $2)
       AND ($3 = 0 OR items.id > $3)
+			AND (items.up - items.down > -5)
     ORDER BY items.id DESC LIMIT 120`, req.ContentTypes.AsFlags(), req.Older, req.Newer)
 
 	if err != nil {
