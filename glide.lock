@@ -13,8 +13,6 @@ imports:
   version: ee1442bda7bd1b6a84e913bdb421cb1874ec629d
   subpackages:
   - oid
-- name: github.com/mopsalarm/go-pr0gramm
-  version: 851a52045e855c424a67afdfa59293f69634bb95
 - name: github.com/rcrowley/go-metrics
   version: eeba7bd0dd01ace6e690fa833b3f22aaec29af43
 - name: github.com/vistarmedia/go-datadog

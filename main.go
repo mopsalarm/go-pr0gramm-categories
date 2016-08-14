@@ -10,191 +10,196 @@ import (
 	"github.com/mopsalarm/go-pr0gramm"
 	"github.com/rcrowley/go-metrics"
 	"github.com/vistarmedia/go-datadog"
-	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+	"github.com/mopsalarm/go-pr0gramm-tags/tagsapi"
+	"bytes"
+	"net/url"
+	log "github.com/Sirupsen/logrus"
+	"github.com/patrickmn/go-cache"
+	"sort"
 )
 
 const SAMPLE_PERIOD = time.Minute
 
-const AUDIO = 8
-
 type Args struct {
-	HelpFlag bool   `flag:"help" description:"Display this help message and exit"`
-	Port     int    `option:"p, port" default:"8080" description:"The port to open the rest service on"`
-	Postgres string `option:"postgres" default:"host=localhost user=postgres password=password sslmode=disable" description:"Postgres DSN for database connection"`
-	Datadog  string `option:"datadog" description:"Datadog api key for reporting"`
+	HelpFlag    bool   `flag:"help" description:"Display this help message and exit"`
+	Port        int    `option:"p, port" default:"8080" description:"The port to open the rest service on"`
+	Postgres    string `option:"postgres" default:"host=localhost user=postgres password=password sslmode=disable" description:"Postgres DSN for database connection"`
+	TagsService string `option:"tags-service" required:"true" description:"Http url of the tags service to use to answer queries."`
+	Datadog     string `option:"datadog" description:"Datadog api key for reporting"`
 }
 
-// Literal escape the given string.
-func EscapeDbString(s string) string {
-	p := ""
+var itemCache = cache.New(5 * time.Minute, 30 * time.Second)
 
-	if strings.Contains(s, `\`) {
-		p = "E"
+func lookupItemsInCache(itemIds []int32) ([]pr0gramm.Item, []int32) {
+	var notFound []int32
+	var items []pr0gramm.Item = make([]pr0gramm.Item, 0, len(itemIds))
+
+	for _, itemId := range itemIds {
+		key := strconv.Itoa(int(itemId))
+		if item, found := itemCache.Get(key); found {
+			items = append(items, item.(pr0gramm.Item))
+		} else {
+			notFound = append(notFound, itemId)
+		}
 	}
 
-	s = strings.Replace(s, `'`, `''`, -1)
-	s = strings.Replace(s, `\`, `\\`, -1)
-	return p + `'` + s + `'`
+	return items, notFound
 }
 
-func scanItemsFromCursor(rows *sql.Rows, req pr0gramm.ItemsRequest) pr0gramm.Items {
-	itemList := make([]pr0gramm.Item, 0, 120)
-	for rows.Next() {
-		// get the stuff from the cursor
-		var created int64
-		var item pr0gramm.Item
-		err := rows.Scan(&item.Id, &item.Promoted, &item.Up, &item.Down, &item.Flags,
-			&item.Image, &item.Source, &item.Thumbnail, &item.Fullsize,
-			&item.User, &item.Mark, &created, &item.Width, &item.Height, &item.Audio)
+func putItemsIntoCache(items []pr0gramm.Item) {
+	for _, item := range items {
+		key := strconv.Itoa(int(item.Id))
+		itemCache.Set(key, item, cache.DefaultExpiration)
+	}
+}
 
-		if err != nil {
-			panic(err)
+func scanItemsFromCursor(rows *sql.Rows) ([]pr0gramm.Item, error) {
+	var items []pr0gramm.Item
+
+	var err error
+	if rows != nil {
+		for rows.Next() {
+			// get the stuff from the cursor
+			var created int64
+			var item pr0gramm.Item
+			err := rows.Scan(&item.Id, &item.Promoted, &item.Up, &item.Down, &item.Flags,
+				&item.Image, &item.Source, &item.Thumbnail, &item.Fullsize,
+				&item.User, &item.Mark, &created, &item.Width, &item.Height, &item.Audio)
+
+			if err != nil {
+				return nil, err
+			}
+
+			item.Created = pr0gramm.Timestamp{time.Unix(created, 0)}
+			items = append(items, item)
 		}
 
-		item.Created = pr0gramm.Timestamp{time.Unix(created, 0)}
-		itemList = append(itemList, item)
+		err = rows.Err()
 	}
 
-	return pr0gramm.Items{
+	return items, err
+}
+
+func contentTypesToSearchQuery(types pr0gramm.ContentTypes) string {
+	query := []string{}
+	for _, contentType := range types {
+		switch contentType {
+		case pr0gramm.SFW:
+			query = append(query, "f:sfw")
+		case pr0gramm.NSFW:
+			query = append(query, "f:nsfw")
+		case pr0gramm.NSFL:
+			query = append(query, "f:nsfl")
+		}
+	}
+
+	return "(" + strings.Join(query, "|") + ")"
+}
+
+func QueryTagsService(db *sql.DB, client *tagsapi.Client, req pr0gramm.ItemsRequest) (*pr0gramm.Items, error) {
+	var query []string
+	if req.ContentTypes.AsFlags() != 7 {
+		// add content type filter
+		query = append(query, contentTypesToSearchQuery(req.ContentTypes))
+	}
+
+	if req.Tags != "" {
+		query = append(query, "(" + req.Tags +
+			")")
+	}
+
+	if req.User != "" {
+		query = append(query, "u:" + req.User)
+	}
+
+	if req.Top {
+		query = append(query, "f:top")
+	}
+
+	// req.Older is an items.Promoted id, if req.Top is true.
+	if req.Top && req.Older > 0 {
+		id, err := resolvePromotedId(db, req.Older)
+		if err != nil {
+			return nil, fmt.Errorf("Could not resolve promotedId %d: %s", req.Older, err)
+		}
+
+		// set the resolved id.
+		req.Older = id
+	}
+
+	searchConfig := tagsapi.SearchConfig{OlderThan: int(req.Older), Random: req.Random}
+	result, err := client.Search(strings.Join(query, "&"), searchConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// reolve items using memory cache
+	items, dbItemIds := lookupItemsInCache(result.Items)
+
+	var rows *sql.Rows
+	if len(dbItemIds) > 0 {
+		log.WithField("count", len(dbItemIds)).Info("Need to query database for item infos")
+
+		var buffer bytes.Buffer
+		for idx, item := range dbItemIds {
+			if idx > 0 {
+				buffer.WriteRune(',')
+			}
+
+			buffer.WriteString(strconv.Itoa(int(item)))
+		}
+
+		rows, err = db.Query(`
+			SELECT items.id, items.promoted, items.up, items.down, items.flags,
+				items.image, items.source, items.thumb, items.fullsize,
+				items.username, items.mark, items.created, items.width, items.height, items.audio
+			FROM items
+			WHERE items.id IN (` + buffer.String() + `)
+			LIMIT 120`)
+
+		if err != nil {
+			return nil, err
+		}
+
+		// cleanup later
+		defer rows.Close()
+
+		dbItems, err := scanItemsFromCursor(rows)
+		if err != nil {
+			return nil, err
+		}
+
+		putItemsIntoCache(dbItems)
+		items = append(items, dbItems...)
+	}
+
+	// sort and filter according to request
+	if req.Top {
+		items = FilterOnlyPromoted(items)
+		sort.Sort(sort.Reverse(TopItemSlice(items)))
+	} else {
+		sort.Sort(sort.Reverse(NormalItemSlice(items)))
+	}
+
+	return &pr0gramm.Items{
 		Response: pr0gramm.Response{
 			Timestamp: pr0gramm.Timestamp{time.Now()},
 		},
-		Items:   itemList,
-		AtEnd:   len(itemList) < 120,
+		Items:   items,
+		AtEnd:   len(items) < 80, // maybe some items got lost?
 		AtStart: req.Older == 0,
-	}
+	}, err
 }
 
-func HandleControversial(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gramm.Items, error) {
-	rows, err := db.Query(`
-    SELECT items.id, items.promoted, items.up, items.down, items.flags,
-      items.image, items.source, items.thumb, items.fullsize,
-      items.username, items.mark, items.created, items.width, items.height, items.audio
-    FROM items
-      JOIN controversial ON items.id=controversial.item_id
-    WHERE (items.flags & $1 != 0)
-      AND ($2 = 0 OR items.id < $2)
-      AND ($3 = 0 OR items.id > $3)
-    ORDER BY controversial.id DESC LIMIT 120`, req.ContentTypes.AsFlags(), req.Older, req.Newer)
-
-	if err != nil {
-		panic(err)
-	}
-
-	defer rows.Close()
-	return scanItemsFromCursor(rows, req), nil
-}
-
-func HandleText(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gramm.Items, error) {
-	rows, err := db.Query(`
-    SELECT items.id, items.promoted, items.up, items.down, items.flags,
-      items.image, items.source, items.thumb, items.fullsize,
-      items.username, items.mark, items.created, items.width, items.height, items.audio
-    FROM items
-      JOIN items_text ON items.id=items_text.item_id
-    WHERE items_text.has_text
-    	AND (items.flags & $1 != 0)
-      AND ($2 = 0 OR items.id < $2)
-      AND ($3 = 0 OR items.id > $3)
-			AND (items.up - items.down > -5)
-    ORDER BY items.id DESC LIMIT 120`, req.ContentTypes.AsFlags(), req.Older, req.Newer)
-
-	if err != nil {
-		panic(err)
-	}
-
-	defer rows.Close()
-	return scanItemsFromCursor(rows, req), nil
-}
-
-func HandleBestOf(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gramm.Items, error) {
-	var minScore = 2000
-
-	// parse min score value, if present and valid.
-	if minScoreStr := r.FormValue("score"); minScoreStr != "" {
-		if value, err := strconv.Atoi(minScoreStr); err == nil {
-			minScore = value
-		}
-	}
-
-	// start building the query
-	qJoins := []string{"JOIN items ON items_bestof.id=items.id"}
-	qWhere := []string{fmt.Sprintf("items_bestof.score > %d", minScore)}
-
-	if req.Tags != nil {
-		term := strings.Join(strings.Split(strings.Replace(*req.Tags, "&", "", -1), " "), " & ")
-		term = EscapeDbString(term)
-
-		qJoins = append(qJoins, "JOIN tags ON items_bestof.id=tags.item_id")
-		qWhere = append(qWhere, fmt.Sprintf(
-			"to_tsvector('simple', tags.tag) @@ to_tsquery('simple', %s)", term))
-	}
-
-	if req.ContentTypes.AsFlags() != 7 {
-		qWhere = append(qWhere, fmt.Sprintf("items.flags & %d != 0", req.ContentTypes.AsFlags()))
-	}
-
-	if req.User != nil {
-		name := strings.ToLower(*req.User)
-		qWhere = append(qWhere, "lower(items.username)="+EscapeDbString(name))
-	}
-
-	query := fmt.Sprintf(`
-    SELECT DISTINCT ON (items_bestof.id)
-      items.id, items.promoted, items.up, items.down, items.flags,
-      items.image, items.source, items.thumb, items.fullsize,
-      items.username, items.mark, items.created, items.width, items.height, items.audio
-    FROM items_bestof
-    %s WHERE %s
-      AND ($1 = 0 OR items.id < $1)
-      AND ($2 = 0 OR items.id > $2)
-    ORDER BY items_bestof.id DESC LIMIT 120
-    `,
-		strings.Join(qJoins, " "),
-		strings.Join(qWhere, " AND "))
-
-	rows, err := db.Query(query, req.Older, req.Newer)
-	if err != nil {
-		panic(err)
-	}
-
-	defer rows.Close()
-	return scanItemsFromCursor(rows, req), nil
-}
-
-func HandleRandom(db *sql.DB, req pr0gramm.ItemsRequest, r *http.Request) (pr0gramm.Items, error) {
-	var rows *sql.Rows
-	var err error
-
-	// execute the correct query
-	flags := req.ContentTypes.AsFlags()
-	if flags == 4 || flags == (4|AUDIO) {
-		rows, err = db.Query(QueryRandomNsfl, flags)
-	} else {
-		rows, err = db.Query(QueryRandomRest, flags)
-	}
-
-	if err != nil {
-		panic(err)
-	}
-
-	defer rows.Close()
-	result := scanItemsFromCursor(rows, req)
-
-	// shuffle
-	for i := range result.Items {
-		j := rand.Intn(i + 1)
-		result.Items[i], result.Items[j] = result.Items[j], result.Items[i]
-	}
-
-	result.AtEnd = len(result.Items) > 60
-	return result, nil
+func resolvePromotedId(db *sql.DB, promotedId pr0gramm.Id) (id pr0gramm.Id, err error) {
+	row := db.QueryRow("SELECT id FROM items WHERE promoted = $1", promotedId)
+	err = row.Scan(&id)
+	return
 }
 
 func parseArguments() *Args {
@@ -215,38 +220,11 @@ func ping(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func UpdateNsflView(db *sql.DB) {
-	go UpdateNsflViewOnce(db)
-	for range time.Tick(6 * time.Hour) {
-		go UpdateNsflViewOnce(db)
-	}
-}
-
-func UpdateNsflViewOnce(db *sql.DB) {
-	log.Println("Updating nsfl view")
-
-	tx, err := db.Begin()
-	if err != nil {
-		panic(err)
-	}
-
-	_, err = tx.Exec(`
-    -- create view with only nsfl posts
-    CREATE MATERIALIZED VIEW IF NOT EXISTS random_items_nsfl (id, flags, promoted) AS (
-      SELECT id, flags, promoted FROM items WHERE flags=4);
-
-    -- to use "refresh view concurrently", we need a unique index on the id column
-    CREATE UNIQUE INDEX IF NOT EXISTS postgres_random_nsfl__id ON random_items_nsfl(id);
-
-    -- refresh the nsfl items.
-    REFRESH MATERIALIZED VIEW CONCURRENTLY random_items_nsfl;`)
-
-	if err != nil {
-		tx.Rollback()
-		panic(err)
+func andTags(previous string, additional string) string {
+	if previous != "" {
+		return "(" + previous + ")&(" + additional + ")"
 	} else {
-		log.Println("Updating nsfl view completed")
-		tx.Commit()
+		return "(" + additional + ")"
 	}
 }
 
@@ -257,6 +235,7 @@ func main() {
 	db, err := sql.Open("postgres", args.Postgres)
 	if err != nil {
 		log.Fatal(err)
+		return
 	}
 
 	defer db.Close()
@@ -267,6 +246,7 @@ func main() {
 	// check if it is valid
 	if err = db.Ping(); err != nil {
 		log.Fatal(err)
+		return
 	}
 
 	// get info about the runtime every few seconds
@@ -276,23 +256,76 @@ func main() {
 	if len(args.Datadog) > 0 {
 		host, _ := os.Hostname()
 
-		fmt.Printf("Starting datadog reporter on host %s\n", host)
+		log.Info("Starting datadog reporter on host %s\n", host)
 		go datadog.New(host, args.Datadog).DefaultReporter().Start(SAMPLE_PERIOD)
 	}
 
-	go UpdateNsflView(db)
+	// go UpdateNsflView(db)
+
+	// tag api client
+	// client, err := tagsapi.NewClient(http.DefaultClient, "http://104.236.68.203:8081")
+	client, err := tagsapi.NewClient(http.DefaultClient, args.TagsService)
+	if err != nil {
+		panic(err)
+	}
 
 	router := mux.NewRouter().StrictSlash(true)
+	router.Handle("/general", &CategoryHandler{
+		database: db,
+		timer: metrics.GetOrRegisterTimer("pr0gramm.categories.general.query", nil),
+		handle: func(db *sql.DB, req pr0gramm.ItemsRequest, urlValues url.Values) (*pr0gramm.Items, error) {
+			return QueryTagsService(db, client, req)
+		},
+	})
 
-	timer := metrics.NewRegisteredTimer("pr0gramm.categories.controversial.update", nil)
-	router.Handle("/controversial", &CategoryHandler{db, timer, HandleControversial})
-	router.Handle("/bestof", &CategoryHandler{db, timer, HandleBestOf})
-	router.Handle("/random", &CategoryHandler{db, timer, HandleRandom})
-	router.Handle("/text", &CategoryHandler{db, timer, HandleText})
+	router.Handle("/bestof", &CategoryHandler{
+		database: db,
+		timer: metrics.GetOrRegisterTimer("pr0gramm.categories.bestof.query", nil),
+		handle: func(db *sql.DB, req pr0gramm.ItemsRequest, urlValues url.Values) (*pr0gramm.Items, error) {
+			minScore := 500
+			if parsedScore, err := strconv.Atoi(urlValues.Get("score")); err == nil {
+				// round down to next multiple of 500
+				parsedScore = (parsedScore / 500) * 500
+				if parsedScore > 0 {
+					minScore = parsedScore
+				}
+			}
+
+			req.Tags = andTags(req.Tags, fmt.Sprintf("s:%d", minScore))
+			return QueryTagsService(db, client, req)
+		},
+	})
+
+	router.Handle("/text", &CategoryHandler{
+		database: db,
+		timer: metrics.GetOrRegisterTimer("pr0gramm.categories.text.query", nil),
+		handle: func(db *sql.DB, req pr0gramm.ItemsRequest, urlValues url.Values) (*pr0gramm.Items, error) {
+			req.Tags = andTags(req.Tags, "f:text")
+			return QueryTagsService(db, client, req)
+		},
+	})
+
+	router.Handle("/controversial", &CategoryHandler{
+		database: db,
+		timer: metrics.GetOrRegisterTimer("pr0gramm.categories.controversial.query", nil),
+		handle: func(db *sql.DB, req pr0gramm.ItemsRequest, urlValues url.Values) (*pr0gramm.Items, error) {
+			req.Tags = andTags(req.Tags, "f:controversial")
+			return QueryTagsService(db, client, req)
+		},
+	})
+
+	router.Handle("/random", &CategoryHandler{
+		database: db,
+		timer: metrics.GetOrRegisterTimer("pr0gramm.categories.controversial.query", nil),
+		handle: func(db *sql.DB, req pr0gramm.ItemsRequest, urlValues url.Values) (*pr0gramm.Items, error) {
+			return QueryTagsService(db, client, req.WithRandom(true))
+		},
+	})
+
 	router.HandleFunc("/ping", ping)
 
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", args.Port),
 		handlers.RecoveryHandler()(
-			handlers.LoggingHandler(os.Stdout,
+			handlers.LoggingHandler(log.StandardLogger().Writer(),
 				handlers.CORS()(router)))))
 }

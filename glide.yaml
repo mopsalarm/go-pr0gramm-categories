@@ -7,7 +7,9 @@ import:
 - package: github.com/gorilla/mux
   version: ~1.1.0
 - package: github.com/lib/pq
-- package: github.com/mopsalarm/go-pr0gramm
-  version: master
 - package: github.com/rcrowley/go-metrics
 - package: github.com/vistarmedia/go-datadog
+- package: github.com/Sirupsen/logrus
+  version: ~0.10.0
+- package: github.com/patrickmn/go-cache
+  version: ~2.0.0
