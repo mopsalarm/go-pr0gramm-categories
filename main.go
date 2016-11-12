@@ -1,26 +1,26 @@
 package main // import "github.com/mopsalarm/go-pr0gramm-categories"
 
 import (
+	"bytes"
 	"database/sql"
 	"fmt"
+	log "github.com/Sirupsen/logrus"
 	"github.com/bobziuchkovski/writ"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
 	"github.com/mopsalarm/go-pr0gramm"
+	"github.com/mopsalarm/pr0gramm-tags/tagsapi"
+	"github.com/patrickmn/go-cache"
 	"github.com/rcrowley/go-metrics"
 	"github.com/vistarmedia/go-datadog"
 	"net/http"
+	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
-	"github.com/mopsalarm/go-pr0gramm-tags/tagsapi"
-	"bytes"
-	"net/url"
-	log "github.com/Sirupsen/logrus"
-	"github.com/patrickmn/go-cache"
-	"sort"
 )
 
 const SAMPLE_PERIOD = time.Minute
@@ -33,7 +33,7 @@ type Args struct {
 	Datadog     string `option:"datadog" description:"Datadog api key for reporting"`
 }
 
-var itemCache = cache.New(5 * time.Minute, 30 * time.Second)
+var itemCache = cache.New(5*time.Minute, 30*time.Second)
 
 func lookupItemsInCache(itemIds []int32) ([]pr0gramm.Item, []int32) {
 	var notFound []int32
@@ -95,6 +95,8 @@ func contentTypesToSearchQuery(types pr0gramm.ContentTypes) string {
 			query = append(query, "f:nsfw")
 		case pr0gramm.NSFL:
 			query = append(query, "f:nsfl")
+		case pr0gramm.NSFP:
+			query = append(query, "f:nsfp")
 		}
 	}
 
@@ -103,18 +105,18 @@ func contentTypesToSearchQuery(types pr0gramm.ContentTypes) string {
 
 func QueryTagsService(db *sql.DB, client *tagsapi.Client, req pr0gramm.ItemsRequest) (*pr0gramm.Items, error) {
 	var query []string
-	if req.ContentTypes.AsFlags() != 7 {
+	if req.ContentTypes.AsFlags() != pr0gramm.AllContentTypes.AsFlags() {
 		// add content type filter
 		query = append(query, contentTypesToSearchQuery(req.ContentTypes))
 	}
 
 	if req.Tags != "" {
-		query = append(query, "(" + req.Tags +
+		query = append(query, "("+req.Tags+
 			")")
 	}
 
 	if req.User != "" {
-		query = append(query, "u:" + req.User)
+		query = append(query, "u:"+req.User)
 	}
 
 	if req.Top {
@@ -260,10 +262,7 @@ func main() {
 		go datadog.New(host, args.Datadog).DefaultReporter().Start(SAMPLE_PERIOD)
 	}
 
-	// go UpdateNsflView(db)
-
 	// tag api client
-	// client, err := tagsapi.NewClient(http.DefaultClient, "http://104.236.68.203:8081")
 	client, err := tagsapi.NewClient(http.DefaultClient, args.TagsService)
 	if err != nil {
 		panic(err)
@@ -272,7 +271,7 @@ func main() {
 	router := mux.NewRouter().StrictSlash(true)
 	router.Handle("/general", &CategoryHandler{
 		database: db,
-		timer: metrics.GetOrRegisterTimer("pr0gramm.categories.general.query", nil),
+		timer:    metrics.GetOrRegisterTimer("pr0gramm.categories.general.query", nil),
 		handle: func(db *sql.DB, req pr0gramm.ItemsRequest, urlValues url.Values) (*pr0gramm.Items, error) {
 			return QueryTagsService(db, client, req)
 		},
@@ -280,7 +279,7 @@ func main() {
 
 	router.Handle("/bestof", &CategoryHandler{
 		database: db,
-		timer: metrics.GetOrRegisterTimer("pr0gramm.categories.bestof.query", nil),
+		timer:    metrics.GetOrRegisterTimer("pr0gramm.categories.bestof.query", nil),
 		handle: func(db *sql.DB, req pr0gramm.ItemsRequest, urlValues url.Values) (*pr0gramm.Items, error) {
 			minScore := 500
 			if parsedScore, err := strconv.Atoi(urlValues.Get("score")); err == nil {
@@ -298,7 +297,7 @@ func main() {
 
 	router.Handle("/text", &CategoryHandler{
 		database: db,
-		timer: metrics.GetOrRegisterTimer("pr0gramm.categories.text.query", nil),
+		timer:    metrics.GetOrRegisterTimer("pr0gramm.categories.text.query", nil),
 		handle: func(db *sql.DB, req pr0gramm.ItemsRequest, urlValues url.Values) (*pr0gramm.Items, error) {
 			req.Tags = andTags(req.Tags, "f:text")
 			return QueryTagsService(db, client, req)
@@ -307,7 +306,7 @@ func main() {
 
 	router.Handle("/controversial", &CategoryHandler{
 		database: db,
-		timer: metrics.GetOrRegisterTimer("pr0gramm.categories.controversial.query", nil),
+		timer:    metrics.GetOrRegisterTimer("pr0gramm.categories.controversial.query", nil),
 		handle: func(db *sql.DB, req pr0gramm.ItemsRequest, urlValues url.Values) (*pr0gramm.Items, error) {
 			req.Tags = andTags(req.Tags, "f:controversial")
 			return QueryTagsService(db, client, req)
@@ -316,7 +315,7 @@ func main() {
 
 	router.Handle("/random", &CategoryHandler{
 		database: db,
-		timer: metrics.GetOrRegisterTimer("pr0gramm.categories.controversial.query", nil),
+		timer:    metrics.GetOrRegisterTimer("pr0gramm.categories.controversial.query", nil),
 		handle: func(db *sql.DB, req pr0gramm.ItemsRequest, urlValues url.Values) (*pr0gramm.Items, error) {
 			return QueryTagsService(db, client, req.WithRandom(true))
 		},

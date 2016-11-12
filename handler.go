@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"github.com/mopsalarm/go-pr0gramm"
 	"github.com/rcrowley/go-metrics"
-	"net/http"
-	"strconv"
-	"time"
 	"log"
+	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type SearchProvider func(*sql.DB, pr0gramm.ItemsRequest, url.Values) (*pr0gramm.Items, error)
