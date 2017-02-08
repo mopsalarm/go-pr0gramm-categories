@@ -1,5 +1,5 @@
-hash: 5f429827be9f7627de53fcb2ce7bc36aa41292db4582c98d5835c3a93090eacc
-updated: 2016-11-12T12:55:07.510667743+01:00
+hash: 89c64deeb93c842867053adbc5420ad4f2615b3f7c6a5c0945946514d6deb859
+updated: 2017-02-08T18:41:55.734061411+01:00
 imports:
 - name: github.com/bobziuchkovski/writ
   version: 08e3f25d8bc677e6dcf7b157614c712622556019
@@ -22,9 +22,9 @@ imports:
 - name: github.com/patrickmn/go-cache
   version: 1881a9bccb818787f68c52bfba648c6cf34c34fa
 - name: github.com/rcrowley/go-metrics
-  version: ab2277b1c5d15c3cba104e9cbddbdfc622df5ad8
+  version: 1f30fe9094a513ce4c700b9a54458bbb0c96996c
 - name: github.com/Sirupsen/logrus
-  version: d26492970760ca5d33129d2d799e34be5c4782eb
+  version: c078b1e43f58d563c74cebe63c85789e76ddb627
 - name: github.com/vistarmedia/go-datadog
   version: d05578420bfaf173df31fc00580f57b904df6222
 - name: golang.org/x/sys
