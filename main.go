@@ -4,6 +4,14 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
 	log "github.com/Sirupsen/logrus"
 	"github.com/bobziuchkovski/writ"
 	"github.com/gorilla/handlers"
@@ -14,13 +22,6 @@ import (
 	"github.com/patrickmn/go-cache"
 	"github.com/rcrowley/go-metrics"
 	"github.com/vistarmedia/go-datadog"
-	"net/http"
-	"net/url"
-	"os"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
 )
 
 const SAMPLE_PERIOD = time.Minute
@@ -262,8 +263,17 @@ func main() {
 		go datadog.New(host, args.Datadog).DefaultReporter().Start(SAMPLE_PERIOD)
 	}
 
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     5 * time.Second,
+		},
+
+		Timeout: 10 * time.Second,
+	}
+
 	// tag api client
-	client, err := tagsapi.NewClient(http.DefaultClient, args.TagsService)
+	client, err := tagsapi.NewClient(httpClient, args.TagsService)
 	if err != nil {
 		panic(err)
 	}
