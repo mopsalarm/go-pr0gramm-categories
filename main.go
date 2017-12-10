@@ -112,8 +112,7 @@ func QueryTagsService(db *sql.DB, client *tagsapi.Client, req pr0gramm.ItemsRequ
 	}
 
 	if req.Tags != "" {
-		query = append(query, "("+req.Tags+
-			")")
+		query = append(query, "("+req.Tags+")")
 	}
 
 	if req.User != "" {
@@ -181,6 +180,9 @@ func QueryTagsService(db *sql.DB, client *tagsapi.Client, req pr0gramm.ItemsRequ
 		items = append(items, dbItems...)
 	}
 
+	// re-check filter
+	items = FilterByFlags(items, req.ContentTypes)
+
 	// sort and filter according to request
 	if req.Top {
 		items = FilterOnlyPromoted(items)
@@ -197,6 +199,19 @@ func QueryTagsService(db *sql.DB, client *tagsapi.Client, req pr0gramm.ItemsRequ
 		AtEnd:   len(items) < 80, // maybe some items got lost?
 		AtStart: req.Older == 0,
 	}, err
+}
+
+func FilterByFlags(items []pr0gramm.Item, types pr0gramm.ContentTypes) []pr0gramm.Item {
+	flagsInt := types.AsFlags()
+
+	result := make([]pr0gramm.Item, 0, len(items))
+	for _, item := range items {
+		if item.Flags&flagsInt != 0 {
+			result = append(result, item)
+		}
+	}
+
+	return result
 }
 
 func resolvePromotedId(db *sql.DB, promotedId pr0gramm.Id) (id pr0gramm.Id, err error) {
