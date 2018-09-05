@@ -12,7 +12,7 @@ RUN go mod download
 ENV CGO_ENABLED=0
 
 COPY . .
-RUN go build -o /go-pr0gramm-categories -v .
+RUN go build -v -ldflags="-s -w" -o /go-pr0gramm-categories .
 
 
 FROM alpine:3.8
