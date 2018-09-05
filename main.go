@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/bobziuchkovski/writ"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
@@ -21,6 +20,7 @@ import (
 	"github.com/mopsalarm/pr0gramm-tags/tagsapi"
 	"github.com/patrickmn/go-cache"
 	"github.com/rcrowley/go-metrics"
+	log "github.com/sirupsen/logrus"
 	"github.com/vistarmedia/go-datadog"
 )
 
@@ -38,7 +38,7 @@ var itemCache = cache.New(5*time.Minute, 30*time.Second)
 
 func lookupItemsInCache(itemIds []int32) ([]pr0gramm.Item, []int32) {
 	var notFound []int32
-	var items []pr0gramm.Item = make([]pr0gramm.Item, 0, len(itemIds))
+	var items []pr0gramm.Item
 
 	for _, itemId := range itemIds {
 		key := strconv.Itoa(int(itemId))
@@ -127,7 +127,7 @@ func QueryTagsService(db *sql.DB, client *tagsapi.Client, req pr0gramm.ItemsRequ
 	if req.Top && req.Older > 0 {
 		id, err := resolvePromotedId(db, req.Older)
 		if err != nil {
-			return nil, fmt.Errorf("Could not resolve promotedId %d: %s", req.Older, err)
+			return nil, fmt.Errorf("could not resolve promotedId %d: %s", req.Older, err)
 		}
 
 		// set the resolved id.
