@@ -407,10 +407,10 @@ func DelegateQuery(req pr0gramm.ItemsRequest) (*pr0gramm.Items, error) {
 		query.Set("id", str(int(req.Around)))
 
 	case req.Older > 0:
-		query.Set("older", str(int(req.Around)))
+		query.Set("older", str(int(req.Older)))
 
 	case req.Newer > 0:
-		query.Set("newer", str(int(req.Around)))
+		query.Set("newer", str(int(req.Newer)))
 	}
 
 	resp, err := delegateClient.Get("https://pr0gramm.com/api/items/get?" + query.Encode())
