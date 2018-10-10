@@ -3,6 +3,7 @@ package main // import "github.com/mopsalarm/go-pr0gramm-categories"
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -274,7 +275,7 @@ func main() {
 	if len(args.Datadog) > 0 {
 		host, _ := os.Hostname()
 
-		log.Info("Starting datadog reporter on host %s\n", host)
+		log.Infof("Starting datadog reporter on host %s\n", host)
 		go datadog.New(host, args.Datadog).DefaultReporter().Start(SAMPLE_PERIOD)
 	}
 
@@ -298,7 +299,7 @@ func main() {
 		database: db,
 		timer:    metrics.GetOrRegisterTimer("pr0gramm.categories.general.query", nil),
 		handle: func(db *sql.DB, req pr0gramm.ItemsRequest, urlValues url.Values) (*pr0gramm.Items, error) {
-			return QueryTagsService(db, client, req)
+			return Query(db, client, req)
 		},
 	})
 
@@ -316,7 +317,7 @@ func main() {
 			}
 
 			req.Tags = andTags(req.Tags, fmt.Sprintf("s:%d", minScore))
-			return QueryTagsService(db, client, req)
+			return Query(db, client, req)
 		},
 	})
 
@@ -334,7 +335,7 @@ func main() {
 		timer:    metrics.GetOrRegisterTimer("pr0gramm.categories.controversial.query", nil),
 		handle: func(db *sql.DB, req pr0gramm.ItemsRequest, urlValues url.Values) (*pr0gramm.Items, error) {
 			req.Tags = andTags(req.Tags, "f:controversial")
-			return QueryTagsService(db, client, req)
+			return Query(db, client, req)
 		},
 	})
 
@@ -348,8 +349,81 @@ func main() {
 
 	router.HandleFunc("/ping", ping)
 
+	log.Infof("Starting http server on :%d", args.Port)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", args.Port),
 		handlers.RecoveryHandler()(
 			handlers.LoggingHandler(log.StandardLogger().Writer(),
 				handlers.CORS()(router)))))
+}
+
+func Query(db *sql.DB, client *tagsapi.Client, req pr0gramm.ItemsRequest) (*pr0gramm.Items, error) {
+	if req.Random {
+		return QueryTagsService(db, client, req)
+	}
+
+	items, err := DelegateQuery(req)
+	if err != nil {
+		log.Warnf("Failed to delegate query to pr0gramm: %s", err)
+		return QueryTagsService(db, client, req)
+	}
+
+	return items, err
+}
+
+var delegateClient = &http.Client{
+	Transport: &http.Transport{
+		MaxIdleConnsPerHost: 8,
+		IdleConnTimeout:     5 * time.Second,
+	},
+
+	Timeout: 2 * time.Second,
+}
+
+func DelegateQuery(req pr0gramm.ItemsRequest) (*pr0gramm.Items, error) {
+	query := make(url.Values)
+
+	str := strconv.Itoa
+
+	query.Set("flags", str(req.ContentTypes.AsFlags()))
+
+	if req.Top {
+		query.Set("promoted", "1")
+	}
+
+	if req.Tags != "" {
+		query.Set("tags", "!! "+req.Tags)
+	}
+
+	if req.Likes != "" {
+		query.Set("likes", req.Likes)
+	}
+
+	if req.User != "" {
+		query.Set("user", req.User)
+	}
+
+	switch {
+	case req.Around > 0:
+		query.Set("id", str(int(req.Around)))
+
+	case req.Older > 0:
+		query.Set("older", str(int(req.Around)))
+
+	case req.Newer > 0:
+		query.Set("newer", str(int(req.Around)))
+	}
+
+	resp, err := delegateClient.Get("https://pr0gramm.com/api/items/get?" + query.Encode())
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %s", err)
+	}
+
+	defer resp.Body.Close()
+
+	var items pr0gramm.Items
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		return nil, fmt.Errorf("parsing response failed: %s", err)
+	}
+
+	return &items, nil
 }
