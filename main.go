@@ -391,7 +391,7 @@ func DelegateQuery(req pr0gramm.ItemsRequest) (*pr0gramm.Items, error) {
 	}
 
 	if req.Tags != "" {
-		query.Set("tags", "!! "+req.Tags)
+		query.Set("tags", "! "+strings.TrimSpace(req.Tags))
 	}
 
 	if req.Likes != "" {
